@@ -26,45 +26,44 @@ SERP_API_KEY = os.getenv("SERP_API_KEY")
 
 @app.route('/fitfinder', methods=['POST'])
 def fit_finder():
-    if 'file' not in request.files:
-        return jsonify({"error": "No image uploaded"}), 400
+    # ... (existing upload logic)
     
-    file = request.files['file']
+    # STEP 2: Enhanced SerpApi extraction
+    lens_response = requests.get("https://serpapi.com/search", params=lens_params).json()
+    visual_matches = lens_response.get("visual_matches", [])[:8] # Get more results
     
-    try:
-        # STEP 1: Upload to Cloudinary & Get Public URL
-        upload_result = cloudinary.uploader.upload(file)
-        image_url = upload_result.get("secure_url")
+    # Capture the image URL (thumbnail) along with title and link
+    context_data = [
+        {
+            "title": m.get("title"), 
+            "link": m.get("link"), 
+            "thumbnail": m.get("thumbnail"), # <--- KEY: Capture the image
+            "price": m.get("price", {}).get("extracted_value", "Unknown")
+        } for m in visual_matches
+    ]
 
-        # STEP 2: Feed URL into SerpApi (Google Lens)
-        lens_params = {
-            "engine": "google_lens",
-            "url": image_url,
-            "api_key": SERP_API_KEY
-        }
-        lens_response = requests.get("https://serpapi.com/search", params=lens_params).json()
-        
-        # Extract visual matches (titles and links)
-        visual_matches = lens_response.get("visual_matches", [])[:5]
-        context_data = [{"title": m.get("title"), "link": m.get("link")} for m in visual_matches]
-
-        # STEP 3: Llama 3.3 Stylist Reasoning
-        system_prompt = "You are an elite AI Fashion Stylist. Respond ONLY in a clean JSON format."
-        user_prompt = f"""
-        Analyze these fashion items found in an image: {context_data}.
-        
-        1. Identify the exact Brand and Product Name for the main item.
-        2. Provide a 'Market Price' estimate.
-        3. Give a direct 'Buy Link' (use the most relevant link from the data).
-        4. Suggest 2 other clothing items that match this 'Aesthetic'.
-        
-        Return JSON structure:
-        {{
-            "main_item": {{"name": "", "brand": "", "price": "", "buy_url": ""}},
-            "style_vibe": "",
-            "suggestions": ["item1", "item2"]
-        }}
-        """
+    # STEP 3: Updated Prompt to include images
+    system_prompt = "You are an elite AI Fashion Stylist. Respond ONLY in valid JSON."
+    user_prompt = f"""
+    Using this data: {context_data}
+    
+    TASK:
+    1. Identify the 'main_item' (the best match).
+    2. Create a list of 'similar_items' (3-4 items) including their names, prices, and THUMBNAIL URLs.
+    
+    JSON STRUCTURE:
+    {{
+        "main_item": {{
+            "name": "", "brand": "", "price": "", "buy_url": "", "image_url": "" 
+        }},
+        "similar_items": [
+            {{ "name": "", "price": "", "buy_url": "", "image_url": "" }}
+        ],
+        "style_vibe": "",
+        "suggestions": []
+    }}
+    """
+    
 
         completion = groq_client.chat.completions.create(
             model="llama-3.3-70b-versatile",
